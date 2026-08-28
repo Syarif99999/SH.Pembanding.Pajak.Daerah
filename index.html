@@ -7,7 +7,7 @@
 <link rel="manifest" href="manifest.json" />
 <meta name="theme-color" content="#1B2A4A" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="chart.umd.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 <style>
@@ -305,7 +305,11 @@ function aggregateJenisUsaha(records) {
 // =============================================================================
 function drawRingkasanChart(totals) {
   const canvas = document.getElementById('ringkasanChart');
-  if (!canvas || typeof Chart === 'undefined') return;
+  if (!canvas) return;
+  if (typeof Chart === 'undefined') {
+    canvas.parentElement.innerHTML = '<div class="empty">⚠️ Modul grafik gagal dimuat. Coba muat ulang halaman.</div>';
+    return;
+  }
   if (ringkasanChartInstance) { ringkasanChartInstance.destroy(); }
   const colors = { "2024": "#94A3B8", "2025": "#EFD05C", "2026": "#1B2A4A" };
   ringkasanChartInstance = new Chart(canvas.getContext('2d'), {
@@ -336,7 +340,11 @@ function drawRingkasanChart(totals) {
 
 function drawJenisChart(map) {
   const canvas = document.getElementById('jenisChart');
-  if (!canvas || typeof Chart === 'undefined') return;
+  if (!canvas) return;
+  if (typeof Chart === 'undefined') {
+    canvas.parentElement.innerHTML = '<div class="empty">⚠️ Modul grafik gagal dimuat. Coba muat ulang halaman.</div>';
+    return;
+  }
   if (jenisChartInstance) { jenisChartInstance.destroy(); }
   const jenisList = Object.keys(map).sort((a,b) => map[b]["2026"] - map[a]["2026"]).slice(0, 10);
   jenisChartInstance = new Chart(canvas.getContext('2d'), {
