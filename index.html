@@ -77,6 +77,12 @@
   .chartBox canvas { max-height: 260px; }
   .loadMoreWrap { text-align:center; padding: 10px; }
   .limitNote { text-align:center; font-size: 11.5px; color: var(--gray); padding: 8px; }
+  .formGrid { display:grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .formGrid input { width:100%; padding: 9px 10px; border: 1.5px solid #e2e8f0; border-radius: 8px; font-size: 13px; }
+  .monthGrid { display:grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+  .monthGrid label { font-size: 10.5px; color: var(--gray); display:block; margin-bottom: 3px; font-weight:600; }
+  .monthGrid input { width:100%; padding: 7px 8px; border: 1.5px solid #e2e8f0; border-radius: 7px; font-size: 12px; }
+  select#fTahun { padding: 7px 10px; border: 1.5px solid #e2e8f0; border-radius: 8px; font-size: 12.5px; }
   .install-btn { position: fixed; right: 16px; bottom: 16px; background: var(--gold); color: var(--navy); border:none; border-radius: 50px; padding: 12px 18px; font-weight:700; font-size:12.5px; box-shadow: 0 6px 18px rgba(0,0,0,.25); display:none; z-index: 40; }
 </style>
 </head>
@@ -428,6 +434,8 @@ function renderToolbar() {
   let html = '';
   if (SEARCHABLE_SUBS.includes(currentSub)) {
     html += `<input type="text" id="searchBox" placeholder="Cari nama WP / NPWPD / alamat..." value="${searchTerm.replace(/"/g,'&quot;')}" oninput="onSearch(this.value)" />`;
+    const presetYear = currentSub.startsWith('data') ? currentSub.replace('data', '') : YEARS[YEARS.length - 1];
+    html += `<button class="btn btn-outline" onclick="openEntryForm(null, '${presetYear}')">➕ Tambah WP</button>`;
   }
   html += `<button class="btn btn-gold" onclick="document.getElementById('fileInput').click()">⬆ Upload Data Terbaru</button>`;
   el.innerHTML = html;
@@ -696,6 +704,10 @@ function openDetail(idx) {
       <tr style="font-weight:800;background:#f8fafc;"><td>TOTAL</td><td>${rupiah(t24)}</td><td>${rupiah(t25)}</td><td>${rupiah(t26)}</td></tr>
       </tbody>
     </table></div>
+    <div class="toolRow" style="margin-top:14px;">
+      <button class="btn btn-outline" onclick="openEntryForm(${idx}, '${YEARS[YEARS.length - 1]}')">✏️ Edit Data</button>
+      <button class="btn btn-outline" style="color:var(--red);border-color:var(--red);" onclick="deleteWP(${idx})">🗑️ Hapus WP</button>
+    </div>
   `;
   document.getElementById('modalBg').classList.add('show');
 }
@@ -705,6 +717,107 @@ function closeModal() {
 document.getElementById('modalBg').addEventListener('click', (e) => {
   if (e.target.id === 'modalBg') closeModal();
 });
+
+// =============================================================================
+// FORM PENGISIAN MANUAL — Tambah / Edit / Hapus Wajib Pajak
+// =============================================================================
+function openEntryForm(idx, presetYear) {
+  const payload = loadData(currentModule);
+  const rec = (idx !== null && idx !== undefined) ? payload.records[idx] : null;
+  const year = presetYear || YEARS[YEARS.length - 1];
+  const monthly = (rec && rec.data && rec.data[year] && rec.data[year].monthly) || new Array(12).fill(0);
+  const idxArg = (idx === null || idx === undefined) ? 'null' : idx;
+
+  const monthInputs = MONTHS.map((m, i) => `
+    <div><label>${m}</label><input type="number" step="1" id="fMonth${i}" value="${monthly[i] || 0}" oninput="updateFormTotal()"></div>
+  `).join('');
+  const yearOptions = YEARS.map(y => `<option value="${y}" ${y === year ? 'selected' : ''}>${y}</option>`).join('');
+  const totalNow = monthly.reduce((a, b) => a + (Number(b) || 0), 0);
+
+  document.getElementById('modalContent').innerHTML = `
+    <h3>${rec ? '✏️ Edit' : '➕ Tambah'} Wajib Pajak — ${MODULES[currentModule].label}</h3>
+    <div class="sub">Isi data per bulan untuk tahun yang dipilih. Data tahun lain pada WP ini tidak akan berubah.</div>
+    <div class="formGrid">
+      <input id="fNama" placeholder="Nama WP / Objek" value="${(rec && rec.nama || '').replace(/"/g, '&quot;')}">
+      <input id="fJenis" placeholder="Jenis/Kategori Usaha" value="${(rec && rec.jenis || '').replace(/"/g, '&quot;')}">
+      <input id="fAlamat" placeholder="Alamat" value="${(rec && rec.alamat || '').replace(/"/g, '&quot;')}">
+      <input id="fNpwpd" placeholder="NPWPD" value="${(rec && rec.npwpd || '').replace(/"/g, '&quot;')}">
+    </div>
+    <div class="toolRow" style="margin-bottom:10px;">
+      <label style="font-size:12.5px;font-weight:600;">Tahun:</label>
+      <select id="fTahun" onchange="switchFormYear(${idxArg})">${yearOptions}</select>
+    </div>
+    <div class="monthGrid">${monthInputs}</div>
+    <div style="font-weight:700;margin-bottom:12px;">Total tahun <span id="fTotalYearLabel">${year}</span>: <span id="fTotal">${rupiah(totalNow)}</span></div>
+    <div class="toolRow">
+      <button class="btn btn-gold" onclick="saveEntryForm(${idxArg})">💾 Simpan</button>
+      ${rec ? `<button class="btn btn-outline" style="color:var(--red);border-color:var(--red);" onclick="deleteWP(${idx})">🗑️ Hapus WP Ini</button>` : ''}
+    </div>
+  `;
+  document.getElementById('modalBg').classList.add('show');
+}
+
+function switchFormYear(idx) {
+  const year = document.getElementById('fTahun').value;
+  const payload = loadData(currentModule);
+  const rec = (idx !== null && idx !== undefined) ? payload.records[idx] : null;
+  const monthly = (rec && rec.data && rec.data[year] && rec.data[year].monthly) || new Array(12).fill(0);
+  monthly.forEach((v, i) => { document.getElementById('fMonth' + i).value = v || 0; });
+  updateFormTotal();
+}
+
+function updateFormTotal() {
+  let total = 0;
+  for (let i = 0; i < 12; i++) { total += Number(document.getElementById('fMonth' + i).value) || 0; }
+  document.getElementById('fTotal').textContent = rupiah(total);
+  document.getElementById('fTotalYearLabel').textContent = document.getElementById('fTahun').value;
+}
+
+function saveEntryForm(idx) {
+  const nama = document.getElementById('fNama').value.trim();
+  const jenis = document.getElementById('fJenis').value.trim();
+  const alamat = document.getElementById('fAlamat').value.trim();
+  const npwpd = document.getElementById('fNpwpd').value.trim();
+  const year = document.getElementById('fTahun').value;
+  if (!nama) { showToast('⚠️ Nama WP wajib diisi.'); return; }
+
+  const monthly = [];
+  for (let i = 0; i < 12; i++) { monthly.push(Number(document.getElementById('fMonth' + i).value) || 0); }
+  const total = monthly.reduce((a, b) => a + b, 0);
+
+  const payload = loadData(currentModule);
+  const records = payload.records || [];
+
+  if (idx !== null && idx !== undefined && records[idx]) {
+    const rec = records[idx];
+    rec.nama = nama; rec.jenis = jenis; rec.alamat = alamat; rec.npwpd = npwpd;
+    if (!rec.data) rec.data = {};
+    rec.data[year] = { monthly, total };
+  } else {
+    const newRec = { nama, jenis, alamat, npwpd, data: {} };
+    newRec.data[year] = { monthly, total };
+    records.push(newRec);
+  }
+
+  payload.records = records;
+  payload.updatedAt = Date.now();
+  saveData(currentModule, payload);
+  closeModal();
+  showToast('✅ Data Wajib Pajak berhasil disimpan & disinkronkan.');
+}
+
+function deleteWP(idx) {
+  const payload = loadData(currentModule);
+  const rec = payload.records[idx];
+  if (!rec) return;
+  const ok = confirm(`Hapus seluruh data "${rec.nama || '-'}" dari modul ${MODULES[currentModule].label}?\n\nTindakan ini tidak bisa dibatalkan.`);
+  if (!ok) return;
+  payload.records.splice(idx, 1);
+  payload.updatedAt = Date.now();
+  saveData(currentModule, payload);
+  closeModal();
+  showToast('🗑️ Wajib Pajak berhasil dihapus.');
+}
 
 // =============================================================================
 // UPLOAD EXCEL BARU — membaca sheet "Data 2024/2025/2026" (format sama seperti
