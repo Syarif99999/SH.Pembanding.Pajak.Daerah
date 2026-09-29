@@ -437,7 +437,10 @@ function renderToolbar() {
     const presetYear = currentSub.startsWith('data') ? currentSub.replace('data', '') : YEARS[YEARS.length - 1];
     html += `<button class="btn btn-outline" onclick="openEntryForm(null, '${presetYear}')">➕ Tambah WP</button>`;
   }
-  html += `<button class="btn btn-gold" onclick="document.getElementById('fileInput').click()">⬆ Upload Data Terbaru</button>`;
+  Object.keys(MODULES).forEach(m => {
+    const cls = m === currentModule ? 'btn btn-gold' : 'btn btn-outline';
+    html += `<button class="${cls}" onclick="startUpload('${m}')">⬆ Upload Data ${MODULES[m].label}</button>`;
+  });
   el.innerHTML = html;
 }
 function onSearch(v) {
@@ -821,12 +824,31 @@ function deleteWP(idx) {
 
 // =============================================================================
 // UPLOAD EXCEL BARU — membaca sheet "Data 2024/2025/2026" (format sama seperti
-// file perbandingan SIMPADATAKA), lalu mengganti data modul yang sedang aktif.
+// file perbandingan SIMPADATAKA), lalu mengganti data modul sesuai tombol upload yang ditekan
+// (Hotel / Hiburan / Reklame terpisah, tidak lagi bergantung tab aktif).
 // =============================================================================
+let uploadTarget = null;
+function startUpload(mod) {
+  uploadTarget = mod;
+  document.getElementById('fileInput').click();
+}
+
 document.getElementById('fileInput').addEventListener('change', function (e) {
   const file = e.target.files[0];
-  if (!file) return;
-  const mod = currentModule;
+  const mod = uploadTarget;
+  e.target.value = '';
+  uploadTarget = null;
+  if (!file || !mod) return;
+  const label = MODULES[mod].label;
+
+  // Peringatan bila nama file menyebut modul lain (mis. upload file "hotel" ke tombol Reklame)
+  const fname = file.name.toLowerCase();
+  const mismatch = Object.keys(MODULES).filter(m => m !== mod && fname.includes(m));
+  if (mismatch.length && !fname.includes(mod)) {
+    const other = MODULES[mismatch[0]].label;
+    if (!confirm(`Nama file "${file.name}" tampaknya data ${other}, tetapi Anda menekan Upload Data ${label}.\n\nLanjutkan mengganti data ${label}?`)) return;
+  }
+
   const reader = new FileReader();
   reader.onload = function (evt) {
     try {
@@ -836,16 +858,17 @@ document.getElementById('fileInput').addEventListener('change', function (e) {
         showToast('⚠️ Tidak ditemukan sheet "Data 2024/2025/2026" yang sesuai format.');
         return;
       }
-      const payload = { records, updatedAt: Date.now() };
-      saveData(mod, payload);
-      showToast(`✅ Data ${MODULES[mod].label} diperbarui (${records.length} WP) & disinkronkan.`);
+      const lama = (loadData(mod).records || []).length;
+      const ok = confirm(`Ganti data ${label.toUpperCase()}?\n\nData saat ini: ${lama} WP\nData dari file: ${records.length} WP\n\nHanya modul ${label} yang diganti. Modul lain tidak berubah.`);
+      if (!ok) return;
+      saveData(mod, { records, updatedAt: Date.now() });
+      showToast(`✅ Data ${label} diperbarui (${records.length} WP) & disinkronkan.`);
     } catch (err) {
       console.error(err);
       showToast('❌ Gagal membaca file. Pastikan format sesuai template.');
     }
   };
   reader.readAsArrayBuffer(file);
-  e.target.value = '';
 });
 
 function parseWorkbook(wb) {
