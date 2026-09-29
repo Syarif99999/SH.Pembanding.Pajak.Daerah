@@ -437,10 +437,7 @@ function renderToolbar() {
     const presetYear = currentSub.startsWith('data') ? currentSub.replace('data', '') : YEARS[YEARS.length - 1];
     html += `<button class="btn btn-outline" onclick="openEntryForm(null, '${presetYear}')">➕ Tambah WP</button>`;
   }
-  Object.keys(MODULES).forEach(m => {
-    const cls = m === currentModule ? 'btn btn-gold' : 'btn btn-outline';
-    html += `<button class="${cls}" onclick="startUpload('${m}')">⬆ Upload Data ${MODULES[m].label}</button>`;
-  });
+  html += `<button class="btn btn-gold" onclick="document.getElementById('fileInput').click()">⬆ Upload Data (otomatis Hotel / Hiburan / Reklame)</button>`;
   el.innerHTML = html;
 }
 function onSearch(v) {
@@ -827,27 +824,22 @@ function deleteWP(idx) {
 // file perbandingan SIMPADATAKA), lalu mengganti data modul sesuai tombol upload yang ditekan
 // (Hotel / Hiburan / Reklame terpisah, tidak lagi bergantung tab aktif).
 // =============================================================================
-let uploadTarget = null;
-function startUpload(mod) {
-  uploadTarget = mod;
-  document.getElementById('fileInput').click();
+// Deteksi modul otomatis dari kode rekening di akhir kolom "Jenis"
+// (mis. "BINTANG SATU - 411190301" = Hotel). Tab yang sedang aktif tidak berpengaruh.
+function detectModule(jenis) {
+  const m = String(jenis || '').match(/(\d{9})\s*$/);
+  if (!m) return null;
+  const c = m[1];
+  if (c.startsWith('4111903')) return 'hotel';
+  if (c.startsWith('4111905')) return 'hiburan';
+  if (c.startsWith('41109'))   return 'reklame';
+  return null;
 }
 
 document.getElementById('fileInput').addEventListener('change', function (e) {
   const file = e.target.files[0];
-  const mod = uploadTarget;
   e.target.value = '';
-  uploadTarget = null;
-  if (!file || !mod) return;
-  const label = MODULES[mod].label;
-
-  // Peringatan bila nama file menyebut modul lain (mis. upload file "hotel" ke tombol Reklame)
-  const fname = file.name.toLowerCase();
-  const mismatch = Object.keys(MODULES).filter(m => m !== mod && fname.includes(m));
-  if (mismatch.length && !fname.includes(mod)) {
-    const other = MODULES[mismatch[0]].label;
-    if (!confirm(`Nama file "${file.name}" tampaknya data ${other}, tetapi Anda menekan Upload Data ${label}.\n\nLanjutkan mengganti data ${label}?`)) return;
-  }
+  if (!file) return;
 
   const reader = new FileReader();
   reader.onload = function (evt) {
@@ -858,11 +850,44 @@ document.getElementById('fileInput').addEventListener('change', function (e) {
         showToast('⚠️ Tidak ditemukan sheet "Data 2024/2025/2026" yang sesuai format.');
         return;
       }
-      const lama = (loadData(mod).records || []).length;
-      const ok = confirm(`Ganti data ${label.toUpperCase()}?\n\nData saat ini: ${lama} WP\nData dari file: ${records.length} WP\n\nHanya modul ${label} yang diganti. Modul lain tidak berubah.`);
-      if (!ok) return;
-      saveData(mod, { records, updatedAt: Date.now() });
-      showToast(`✅ Data ${label} diperbarui (${records.length} WP) & disinkronkan.`);
+
+      // Kelompokkan tiap WP ke modulnya berdasarkan kode rekening
+      const groups = { hotel: [], hiburan: [], reklame: [] };
+      const unknown = [];
+      records.forEach(r => {
+        const m = detectModule(r.jenis);
+        if (m) groups[m].push(r); else unknown.push(r);
+      });
+
+      // Bila kode tidak terbaca sama sekali, coba dari nama file, lalu tanya pengguna
+      if (unknown.length === records.length) {
+        const fname = file.name.toLowerCase();
+        let guess = Object.keys(MODULES).find(m => fname.includes(m));
+        if (!guess) {
+          const ans = (prompt('Jenis data tidak terdeteksi otomatis.\nKetik: 1 = Hotel, 2 = Hiburan, 3 = Reklame') || '').trim();
+          guess = { '1': 'hotel', '2': 'hiburan', '3': 'reklame' }[ans];
+        }
+        if (!guess) { showToast('Upload dibatalkan.'); return; }
+        groups[guess] = unknown.splice(0);
+      }
+
+      const targets = Object.keys(groups).filter(m => groups[m].length > 0);
+      let msg = 'Data terdeteksi otomatis:\n\n';
+      targets.forEach(m => {
+        const lama = (loadData(m).records || []).length;
+        msg += `• ${MODULES[m].label}: ${groups[m].length} WP (saat ini ${lama} WP)\n`;
+      });
+      if (unknown.length) msg += `\n⚠️ ${unknown.length} WP tanpa kode rekening dikenali — dilewati.\n`;
+      msg += '\nHanya modul di atas yang diganti. Modul lain tidak berubah. Lanjutkan?';
+      if (!confirm(msg)) return;
+
+      const now = Date.now();
+      targets.forEach(m => saveData(m, { records: groups[m], updatedAt: now }));
+
+      // Pindah ke modul hasil upload (bila satu modul saja) — semua sub-tab ikut terisi otomatis
+      if (targets.length === 1 && currentModule !== targets[0]) switchModule(targets[0]);
+
+      showToast('✅ ' + targets.map(m => `${MODULES[m].label} ${groups[m].length} WP`).join(' · ') + ' — diperbarui & disinkronkan.');
     } catch (err) {
       console.error(err);
       showToast('❌ Gagal membaca file. Pastikan format sesuai template.');
