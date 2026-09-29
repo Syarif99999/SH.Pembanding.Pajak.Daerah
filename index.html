@@ -117,7 +117,7 @@
 </div>
 
 <div id="toast"></div>
-<input type="file" id="fileInput" accept=".xlsx,.xls" />
+<input type="file" id="fileInput" accept=".xlsx,.xls" multiple />
 <button class="install-btn" id="installBtn">⬇ Pasang Aplikasi</button>
 
 <script>
@@ -837,21 +837,31 @@ function detectModule(jenis) {
 }
 
 document.getElementById('fileInput').addEventListener('change', function (e) {
-  const file = e.target.files[0];
+  const files = Array.from(e.target.files || []);
   e.target.value = '';
-  if (!file) return;
+  if (!files.length) return;
+  const file = { name: files.map(f => f.name).join(', ') };
 
-  const reader = new FileReader();
-  reader.onload = function (evt) {
+  Promise.all(files.map(f => new Promise((res, rej) => {
+    const rd = new FileReader();
+    rd.onload = ev => res({ f, buf: ev.target.result });
+    rd.onerror = () => rej(new Error('Gagal membaca ' + f.name));
+    rd.readAsArrayBuffer(f);
+  }))).then(list => {
     try {
-      const wb = XLSX.read(evt.target.result, { type: 'array' });
-      let records = parseWorkbook(wb);
-      const info = [];
-      if (records.length === 0) records = parseWorkbookFlexible(wb, info);
+      const info = [], sheets = [];
+      let records = [];
+      list.forEach(({ f, buf }) => {
+        const wb = XLSX.read(buf, { type: 'array' });
+        sheets.push(...wb.SheetNames);
+        let r = parseWorkbook(wb);
+        if (r.length === 0) r = parseWorkbookFlexible(wb, info, f.name);
+        records = records.concat(r);
+      });
       if (records.length === 0) {
         showUploadReport('⚠️ Data tidak terbaca — belum ada yang berubah',
-          `File: <b>${file.name}</b><br>Sheet di file: ${wb.SheetNames.map(n => '<b>' + n + '</b>').join(', ') || '-'}<br><br>` +
-          `Aplikasi mencari sheet bernama <b>Data 2024</b>, <b>Data 2025</b>, <b>Data 2026</b> (atau nama sheet yang memuat tahun), berisi baris dengan NPWPD dan 12 kolom bulan.` +
+          `File: <b>${file.name}</b><br>Sheet di file: ${sheets.map(n => '<b>' + n + '</b>').join(', ') || '-'}<br><br>` +
+          `Aplikasi mencari sheet <b>Data 2024/2025/2026</b> atau laporan SIMPADATAKA (ada kolom NPWPD dan 12 bulan, tahun di sel "Tahun").` +
           (info.length ? '<br><br>' + info.join('<br>') : ''));
         return;
       }
@@ -877,19 +887,22 @@ document.getElementById('fileInput').addEventListener('change', function (e) {
       }
 
       const targets = Object.keys(groups).filter(m => groups[m].length > 0);
-      let msg = 'Data terdeteksi otomatis:\n\n';
+      const yearsIn = YEARS.filter(y => records.some(r => r.data[y]));
+      const merged = {};
+      let msg = `Data terdeteksi otomatis (tahun ${yearsIn.join(', ')}):\n\n`;
       targets.forEach(m => {
-        const lama = (loadData(m).records || []).length;
-        const t26 = groups[m].reduce((a, r) => a + ((r.data['2026'] && r.data['2026'].total) || 0), 0);
-        const ag26 = groups[m].reduce((a, r) => a + ((r.data['2026'] && r.data['2026'].monthly[7]) || 0), 0);
-        msg += `• ${MODULES[m].label}: ${groups[m].length} WP (saat ini ${lama} WP)\n   2026: ${rupiah(t26)} | Agustus 2026: ${rupiah(ag26)}\n`;
+        merged[m] = mergeRecords(loadData(m).records || [], groups[m]);
+        const yy = yearsIn[yearsIn.length - 1];
+        const tot = groups[m].reduce((a, r) => a + ((r.data[yy] && r.data[yy].total) || 0), 0);
+        const ag = groups[m].reduce((a, r) => a + ((r.data[yy] && r.data[yy].monthly[7]) || 0), 0);
+        msg += `• ${MODULES[m].label}: ${groups[m].length} WP (${merged[m].diperbarui} diperbarui, ${merged[m].baru} baru${merged[m].dikosongkan ? ', ' + merged[m].dikosongkan + ' WP lama tidak ada di file' : ''})\n   ${yy}: ${rupiah(tot)} | Agustus ${yy}: ${rupiah(ag)}\n`;
       });
       if (unknown.length) msg += `\n⚠️ ${unknown.length} WP tanpa kode rekening dikenali — dilewati.\n`;
-      msg += '\nHanya modul di atas yang diganti. Modul lain tidak berubah. Lanjutkan?';
+      msg += `\nHanya tahun ${yearsIn.join(', ')} pada modul di atas yang diganti. Tahun lain & modul lain tidak berubah. Lanjutkan?`;
       if (!confirm(msg)) return;
 
       const now = Date.now();
-      targets.forEach(m => saveData(m, { records: groups[m], updatedAt: now }));
+      targets.forEach(m => saveData(m, { records: merged[m].records, updatedAt: now }));
 
       // Pindah ke modul hasil upload (bila satu modul saja) — semua sub-tab ikut terisi otomatis
       if (targets.length === 1 && currentModule !== targets[0]) switchModule(targets[0]);
@@ -899,8 +912,7 @@ document.getElementById('fileInput').addEventListener('change', function (e) {
       console.error(err);
       showUploadReport('❌ Gagal membaca file', 'Pesan error: ' + (err && err.message ? err.message : err));
     }
-  };
-  reader.readAsArrayBuffer(file);
+  }).catch(err => showUploadReport('❌ Gagal membaca file', 'Pesan error: ' + (err && err.message ? err.message : err)));
 });
 
 function parseWorkbook(wb) {
@@ -928,32 +940,41 @@ function parseWorkbook(wb) {
   return order.map(k => recordMap[k]);
 }
 
-// Parser cadangan: untuk file bentuk laporan SIMPADATAKA (kolom bergabung/spasi,
-// baris TOTAL per kategori). Tahun diambil dari nama sheet; kolom dicari dari NPWPD.
-function parseWorkbookFlexible(wb, info) {
+// Parser untuk laporan SIMPADATAKA ("Perkembangan Penerimaan Pokok + Deposit"):
+// satu sheet, satu tahun (tertulis di sel "Tahun : 2026"), kolom bergabung/spasi,
+// nama kategori (kolom A) hanya di baris pertama tiap kategori, baris TOTAL dilewati.
+function detectSheetYear(ws, sheetName, fileName) {
+  let m = String(sheetName).match(/(2024|2025|2026)/);
+  if (m) return m[1];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, range: 0 }).slice(0, 12);
+  for (const row of rows) {
+    if (!row) continue;
+    const txt = row.filter(v => v !== null && v !== undefined).map(String).join(' ');
+    if (/tahun/i.test(txt)) { m = txt.match(/(20\d\d)/); if (m) return m[1]; }
+  }
+  m = String(fileName || '').match(/(2024|2025|2026)/);
+  return m ? m[1] : null;
+}
+
+function parseWorkbookFlexible(wb, info, fileName) {
   const recordMap = {}, order = [];
   wb.SheetNames.forEach(sn => {
-    const ym = sn.match(/(2024|2025|2026)/);
-    if (!ym) return;
-    const y = ym[1];
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: null });
+    const ws = wb.Sheets[sn];
+    const y = detectSheetYear(ws, sn, fileName);
+    if (!y || !YEARS.includes(y)) { info.push(`Sheet "${sn}": tahun tidak terdeteksi`); return; }
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
     let jenis = '', n = 0;
     rows.forEach(row => {
       if (!row) return;
-      const cells = row.map(v => (v === null || v === undefined) ? null : v);
+      const cells = row.map(v => (v === undefined) ? null : v);
       const texts = cells.filter(v => typeof v === 'string' && v.trim() !== '').map(v => v.trim());
       if (texts.some(t => /^TOTAL/i.test(t))) return;
       const ni = cells.findIndex(v => typeof v === 'string' && /^P\d{15,}/i.test(v.trim()));
-      if (ni < 0) {
-        // baris kategori: teks saja, tanpa angka
-        if (texts.length && !cells.some(v => typeof v === 'number')) {
-          const t = texts.join(' ').trim();
-          if (!/^(NO|NAMA|JENIS|BULAN)\b/i.test(t) && t.length > 3) jenis = t;
-        }
-        return;
-      }
+      if (ni < 0) return;
       const npwpd = cells[ni].trim();
       const before = cells.slice(0, ni).filter(v => typeof v === 'string' && v.trim() !== '').map(v => v.trim());
+      // [jenis?, nama, alamat] — jenis hanya ada di baris pertama tiap kategori
+      if (before.length >= 3) jenis = before[0];
       const alamat = before.length >= 2 ? before[before.length - 1] : '';
       const nama = before.length >= 2 ? before[before.length - 2] : (before[0] || '');
       const nums = cells.slice(ni + 1).filter(v => typeof v === 'number');
@@ -962,12 +983,50 @@ function parseWorkbookFlexible(wb, info) {
       const total = nums.length > 12 ? Number(nums[12]) || 0 : monthly.reduce((a, b) => a + b, 0);
       const key = npwpd + '|' + nama;
       if (!recordMap[key]) { recordMap[key] = { jenis, nama, alamat, npwpd, data: {} }; order.push(key); }
-      recordMap[key].data[y] = { monthly, total };
+      const prev = recordMap[key].data[y];
+      if (prev) {
+        recordMap[key].data[y] = { monthly: prev.monthly.map((v, i) => v + monthly[i]), total: prev.total + total };
+      } else {
+        recordMap[key].data[y] = { monthly, total };
+      }
       n++;
     });
-    info.push(`Sheet "${sn}" (tahun ${y}): ${n} baris terbaca`);
+    info.push(`Sheet "${sn}" (tahun ${y}): ${n} WP terbaca`);
   });
   return order.map(k => recordMap[k]);
+}
+
+// Gabungkan hasil upload ke data yang sudah ada: hanya TAHUN yang ada di file yang diganti,
+// tahun lain (mis. 2024 & 2025) tetap aman. WP baru ditambahkan.
+function mergeRecords(existing, incoming) {
+  const map = {};
+  existing.forEach((r, i) => { map[(r.npwpd || '') + '|' + (r.nama || '')] = i; });
+  const out = existing.map(r => ({ ...r, data: { ...(r.data || {}) } }));
+  let baru = 0, diperbarui = 0, dikosongkan = 0;
+  const yearsIn = new Set();
+  incoming.forEach(r => Object.keys(r.data).forEach(y => yearsIn.add(y)));
+  const seen = new Set(incoming.map(r => (r.npwpd || '') + '|' + (r.nama || '')));
+  out.forEach(t => {
+    const k = (t.npwpd || '') + '|' + (t.nama || '');
+    if (seen.has(k)) return;
+    let ada = false;
+    yearsIn.forEach(y => { if (t.data[y]) { delete t.data[y]; ada = true; } });
+    if (ada) dikosongkan++;
+  });
+  incoming.forEach(r => {
+    const k = (r.npwpd || '') + '|' + (r.nama || '');
+    if (k in map) {
+      const t = out[map[k]];
+      Object.keys(r.data).forEach(y => { t.data[y] = r.data[y]; });
+      if (r.jenis) t.jenis = r.jenis;
+      if (r.alamat) t.alamat = r.alamat;
+      diperbarui++;
+    } else {
+      out.push({ jenis: r.jenis, nama: r.nama, alamat: r.alamat, npwpd: r.npwpd, data: { ...r.data } });
+      baru++;
+    }
+  });
+  return { records: out, baru, diperbarui, dikosongkan };
 }
 
 function showUploadReport(title, html) {
