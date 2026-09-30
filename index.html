@@ -82,6 +82,14 @@
   .monthGrid { display:grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
   .monthGrid label { font-size: 10.5px; color: var(--gray); display:block; margin-bottom: 3px; font-weight:600; }
   .monthGrid input { width:100%; padding: 7px 8px; border: 1.5px solid #e2e8f0; border-radius: 7px; font-size: 12px; }
+  .rkRow.selRow { background: var(--gold-light); box-shadow: inset 3px 0 0 var(--gold); }
+  .rkRow.selRow td:first-child { font-weight: 800; color: var(--navy); }
+  .narasiBox { margin-top: 12px; border: 1.5px solid var(--gold); background: #FFFDF4; border-radius: 12px; padding: 12px 14px; font-size: 13px; line-height: 1.65; }
+  .narasiBox h4 { margin: 0 0 6px; font-size: 13.5px; color: var(--navy); }
+  .narasiBox p { margin: 0 0 8px; }
+  .narasiBox p:last-child { margin-bottom: 0; }
+  .narasiBox .narasiNote { font-size: 11.5px; color: var(--amber); }
+  .narasiHint { margin-top: 12px; text-align: center; font-size: 12px; color: var(--gray); padding: 10px; border: 1.5px dashed #e2e8f0; border-radius: 12px; }
   select#fTahun { padding: 7px 10px; border: 1.5px solid #e2e8f0; border-radius: 8px; font-size: 12.5px; }
   .install-btn { position: fixed; right: 16px; bottom: 16px; background: var(--gold); color: var(--navy); border:none; border-radius: 50px; padding: 12px 18px; font-weight:700; font-size:12.5px; box-shadow: 0 6px 18px rgba(0,0,0,.25); display:none; z-index: 40; }
 </style>
@@ -93,7 +101,7 @@
     <div>
       <span class="badge">BAPENDA KAB. PASER</span>
       <h1>Perbandingan Pajak Daerah</h1>
-      <p>Data SIMPADATAKA — Hotel · Hiburan · Reklame (2024–2026)</p>
+      <p>Data SIMPADATAKA — Hotel · Hiburan · Reklame (<span id="yearRange"></span>)</p>
     </div>
     <span id="syncStatus">🟡 Menyiapkan...</span>
   </div>
@@ -129,7 +137,14 @@ const MODULES = {
   hiburan: { label: "Hiburan", short: "HBR" },
   reklame: { label: "Reklame", short: "RKL" }
 };
-const YEARS = ["2024","2025","2026"];
+// Jendela 3 tahun bergeser otomatis mengikuti tahun berjalan:
+// 2026 -> 2024·2025·2026 ; 2027 -> 2025·2026·2027 ; dst.
+// Data tahun yang keluar dari jendela TIDAK dihapus, hanya tidak ditampilkan.
+const CUR_YEAR = new Date().getFullYear();
+const YEARS = [String(CUR_YEAR - 2), String(CUR_YEAR - 1), String(CUR_YEAR)];
+const Y0 = YEARS[0], Y1 = YEARS[1], Y2 = YEARS[2];
+const YS = y => String(y).slice(-2); // "2026" -> "26"
+const MONTH_FULL = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
 const MONTHS = ["JAN","FEB","MAR","APR","MEI","JUN","JUL","AGU","SEP","OKT","NOV","DES"];
 
 const SEED = {
@@ -139,7 +154,8 @@ const SEED = {
 };
 
 let currentModule = "hotel";
-let currentSub = "ringkasan"; // ringkasan | jenis | perwp | perwpbulanan | data2024 | data2025 | data2026
+let currentSub = "ringkasan"; // ringkasan | jenis | perwp | perwpbulanan | data<tahun>
+let selectedMonth = null; // indeks bulan (0-11) yang diklik di Ringkasan Bulanan
 let searchTerm = "";
 let showAllRows = false;
 let ringkasanChartInstance = null;
@@ -317,7 +333,7 @@ function drawRingkasanChart(totals) {
     return;
   }
   if (ringkasanChartInstance) { ringkasanChartInstance.destroy(); }
-  const colors = { "2024": "#94A3B8", "2025": "#EFD05C", "2026": "#1B2A4A" };
+  const colors = { [Y0]: "#94A3B8", [Y1]: "#EFD05C", [Y2]: "#1B2A4A" };
   ringkasanChartInstance = new Chart(canvas.getContext('2d'), {
     type: 'line',
     data: {
@@ -328,7 +344,7 @@ function drawRingkasanChart(totals) {
         borderColor: colors[y],
         backgroundColor: colors[y],
         tension: 0.3,
-        borderWidth: y === "2026" ? 3 : 2,
+        borderWidth: y === Y2 ? 3 : 2,
         pointRadius: 3
       }))
     },
@@ -352,18 +368,18 @@ function drawJenisChart(map) {
     return;
   }
   if (jenisChartInstance) { jenisChartInstance.destroy(); }
-  const jenisList = Object.keys(map).sort((a,b) => map[b]["2026"] - map[a]["2026"]).slice(0, 10);
+  const jenisList = Object.keys(map).sort((a,b) => map[b][Y2] - map[a][Y2]).slice(0, 10);
   jenisChartInstance = new Chart(canvas.getContext('2d'), {
     type: 'bar',
     data: {
       labels: jenisList,
       datasets: [{
-        label: '2026',
-        data: jenisList.map(j => map[j]["2026"]),
+        label: Y2,
+        data: jenisList.map(j => map[j][Y2]),
         backgroundColor: '#1B2A4A'
       }, {
-        label: '2025',
-        data: jenisList.map(j => map[j]["2025"]),
+        label: Y1,
+        data: jenisList.map(j => map[j][Y1]),
         backgroundColor: '#EFD05C'
       }]
     },
@@ -396,9 +412,7 @@ const SUB_TABS = [
   ["jenis", "🏷️ Per Jenis Usaha"],
   ["perwp", "🧾 Per Wajib Pajak"],
   ["perwpbulanan", "📅 Per WP - Bulanan"],
-  ["data2024", "📄 Data 2024"],
-  ["data2025", "📄 Data 2025"],
-  ["data2026", "📄 Data 2026"]
+  ...YEARS.map(y => ["data" + y, "📄 Data " + y])
 ];
 
 function renderSubTabs() {
@@ -427,7 +441,7 @@ function switchSub(sub) {
 // =============================================================================
 // RENDER: TOOLBAR (search + upload)
 // =============================================================================
-const SEARCHABLE_SUBS = ['perwp', 'perwpbulanan', 'data2024', 'data2025', 'data2026'];
+const SEARCHABLE_SUBS = ['perwp', 'perwpbulanan', ...YEARS.map(y => 'data' + y)];
 
 function renderToolbar() {
   const el = document.getElementById('toolRow');
@@ -508,53 +522,167 @@ function renderContent() {
 function renderRingkasanHTML(records) {
   const totals = aggregateRingkasanBulanan(records);
   let rows = '';
-  const yearTotal = { "2024":0, "2025":0, "2026":0 };
+  const yearTotal = { [Y0]:0, [Y1]:0, [Y2]:0 };
   MONTHS.forEach((m, i) => {
-    const v24 = totals["2024"][i], v25 = totals["2025"][i], v26 = totals["2026"][i];
-    yearTotal["2024"] += v24; yearTotal["2025"] += v25; yearTotal["2026"] += v26;
-    rows += `<tr>
+    const v0 = totals[Y0][i], v1 = totals[Y1][i], v2 = totals[Y2][i];
+    yearTotal[Y0] += v0; yearTotal[Y1] += v1; yearTotal[Y2] += v2;
+    rows += `<tr class="rkRow${selectedMonth === i ? ' selRow' : ''}" id="rkRow${i}" onclick="selectRingkasanMonth(${i})">
       <td>${m}</td>
-      <td>${rupiah(v24)}</td>
-      <td>${rupiah(v25)}</td>
-      <td>${rupiah(v26)}</td>
-      <td>${pct(growth(v25, v24))}</td>
-      <td>${pct(growth(v26, v25))}</td>
+      <td>${rupiah(v0)}</td>
+      <td>${rupiah(v1)}</td>
+      <td>${rupiah(v2)}</td>
+      <td>${pct(growth(v1, v0))}</td>
+      <td>${pct(growth(v2, v1))}</td>
     </tr>`;
   });
   rows += `<tr style="font-weight:800;background:#f8fafc;">
     <td>TOTAL SETAHUN</td>
-    <td>${rupiah(yearTotal["2024"])}</td>
-    <td>${rupiah(yearTotal["2025"])}</td>
-    <td>${rupiah(yearTotal["2026"])}</td>
-    <td>${pct(growth(yearTotal["2025"], yearTotal["2024"]))}</td>
-    <td>${pct(growth(yearTotal["2026"], yearTotal["2025"]))}</td>
+    <td>${rupiah(yearTotal[Y0])}</td>
+    <td>${rupiah(yearTotal[Y1])}</td>
+    <td>${rupiah(yearTotal[Y2])}</td>
+    <td>${pct(growth(yearTotal[Y1], yearTotal[Y0]))}</td>
+    <td>${pct(growth(yearTotal[Y2], yearTotal[Y1]))}</td>
   </tr>`;
+  const narasi = selectedMonth !== null
+    ? narasiBulanHTML(records, selectedMonth)
+    : '<div class="narasiHint">👆 Klik salah satu bulan pada tabel untuk melihat narasi singkatnya.</div>';
   return `
   <div class="chartBox"><canvas id="ringkasanChart"></canvas></div>
   <div class="tableWrap"><table>
-    <thead><tr><th>Bulan</th><th>2024</th><th>2025</th><th>2026</th><th>Growth 25/24</th><th>Growth 26/25</th></tr></thead>
+    <thead><tr><th>Bulan</th><th>${Y0}</th><th>${Y1}</th><th>${Y2}</th><th>Growth ${YS(Y1)}/${YS(Y0)}</th><th>Growth ${YS(Y2)}/${YS(Y1)}</th></tr></thead>
     <tbody>${rows}</tbody>
-  </table></div>`;
+  </table></div>
+  <div id="narasiBox">${narasi}</div>`;
+}
+
+// =============================================================================
+// NARASI SINGKAT PER BULAN (Ringkasan Bulanan)
+// Membandingkan tahun berjalan vs tahun sebelumnya (2026 vs 2025 di 2026;
+// otomatis 2027 vs 2026 di 2027). Bila data bulan itu di tahun berjalan belum
+// ada, narasi memakai dua tahun terakhir yang datanya tersedia.
+// =============================================================================
+function escHtml(t) {
+  return String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+}
+function pctTxt(g) {
+  if (g === null || g === undefined || !isFinite(g)) return null;
+  return Math.abs(g * 100).toFixed(1) + '%';
+}
+function bersihJenis(j) {
+  return String(j || '(Tanpa Kategori)').replace(/\s*-?\s*\d{9}\s*$/, '').trim() || '(Tanpa Kategori)';
+}
+function selisihTxt(d) {
+  return (d >= 0 ? '+' : '−') + rupiah(Math.abs(d));
+}
+
+function narasiBulanHTML(records, mi) {
+  const totals = aggregateRingkasanBulanan(records);
+  const bulan = MONTH_FULL[mi];
+  const modLabel = MODULES[currentModule].label;
+  let cy = Y2, py = Y1, note = '';
+
+  if (!(totals[cy][mi] > 0)) {
+    if (totals[py][mi] > 0) {
+      note = `Data ${cy} untuk ${bulan} belum tersedia, jadi narasi membandingkan ${py} dengan ${Y0}.`;
+      cy = Y1; py = Y0;
+    } else {
+      return `<div class="narasiBox"><h4>📝 Narasi ${bulan}</h4><p>Belum ada data ${bulan} ${Y2} maupun ${Y1} pada modul ${modLabel} untuk dinarasikan.</p></div>`;
+    }
+  }
+
+  const vc = totals[cy][mi], vp = totals[py][mi];
+  const d = vc - vp;
+  const g = growth(vc, vp);
+  const naik = d >= 0;
+  const paras = [];
+
+  // 1) Angka utama bulan tersebut
+  if (vp > 0) {
+    const gt = pctTxt(g);
+    paras.push(`Penerimaan pajak ${modLabel} ${bulan} ${cy} tercatat <b>${rupiah(vc)}</b>, ` +
+      (Math.abs(g) < 0.001 ? `relatif sama dengan` : `${naik ? 'naik' : 'turun'} <b>${rupiah(Math.abs(d))}</b> (${gt}) dibanding`) +
+      ` ${bulan} ${py} sebesar ${rupiah(vp)}.`);
+  } else {
+    paras.push(`Penerimaan pajak ${modLabel} ${bulan} ${cy} tercatat <b>${rupiah(vc)}</b>; belum ada data ${bulan} ${py} sebagai pembanding.`);
+  }
+
+  // 2) Kategori/jenis usaha penggerak perubahan
+  const byJenis = {};
+  const byWP = [];
+  records.forEach(r => {
+    const a = (r.data && r.data[cy] && r.data[cy].monthly && r.data[cy].monthly[mi]) || 0;
+    const b = (r.data && r.data[py] && r.data[py].monthly && r.data[py].monthly[mi]) || 0;
+    if (!a && !b) return;
+    const j = bersihJenis(r.jenis);
+    byJenis[j] = (byJenis[j] || 0) + (a - b);
+    byWP.push({ nama: r.nama || '-', delta: a - b });
+  });
+  const jenisArr = Object.entries(byJenis).filter(([, v]) => Math.abs(v) >= 1).sort((x, y) => y[1] - x[1]);
+  if (vp > 0 && jenisArr.length) {
+    const top = jenisArr[0], bot = jenisArr[jenisArr.length - 1];
+    const parts = [];
+    if (top[1] > 0) parts.push(`kenaikan terbesar dari <b>${escHtml(top[0])}</b> (${selisihTxt(top[1])})`);
+    if (bot[1] < 0) parts.push(`penurunan terbesar dari <b>${escHtml(bot[0])}</b> (${selisihTxt(bot[1])})`);
+    if (parts.length) paras.push(`Berdasarkan jenis usaha, ${parts.join(', sedangkan ')}.`);
+  }
+
+  // 3) Wajib pajak/objek dengan perubahan terbesar
+  if (vp > 0 && byWP.length) {
+    byWP.sort((x, y) => y.delta - x.delta);
+    const up = byWP[0], down = byWP[byWP.length - 1];
+    const parts = [];
+    if (up.delta > 0) parts.push(`kenaikan terbesar: <b>${escHtml(up.nama)}</b> (${selisihTxt(up.delta)})`);
+    if (down.delta < 0) parts.push(`penurunan terbesar: <b>${escHtml(down.nama)}</b> (${selisihTxt(down.delta)})`);
+    if (parts.length) paras.push(`Per Wajib Pajak/objek — ${parts.join('; ')}.`);
+  }
+
+  // 4) Akumulasi Januari s.d. bulan tersebut
+  let accC = 0, accP = 0;
+  for (let i = 0; i <= mi; i++) { accC += totals[cy][i]; accP += totals[py][i]; }
+  const rentang = mi === 0 ? 'Januari' : `Januari–${bulan}`;
+  const ga = growth(accC, accP);
+  if (accP > 0 && ga !== null) {
+    paras.push(`Secara akumulasi ${rentang} ${cy}: <b>${rupiah(accC)}</b>, ` +
+      (Math.abs(ga) < 0.001 ? 'relatif sama dengan' : `${ga >= 0 ? 'naik' : 'turun'} ${pctTxt(ga)} dibanding`) +
+      ` periode yang sama ${py} (${rupiah(accP)}).`);
+  } else if (mi > 0) {
+    paras.push(`Secara akumulasi ${rentang} ${cy}: <b>${rupiah(accC)}</b>.`);
+  }
+
+  return `<div class="narasiBox"><h4>📝 Narasi ${bulan} ${cy} vs ${py} — ${modLabel}</h4>` +
+    (note ? `<p class="narasiNote">ℹ️ ${note}</p>` : '') +
+    paras.map(t => `<p>${t}</p>`).join('') + `</div>`;
+}
+
+function selectRingkasanMonth(i) {
+  selectedMonth = i;
+  document.querySelectorAll('.rkRow').forEach(tr => tr.classList.remove('selRow'));
+  const row = document.getElementById('rkRow' + i);
+  if (row) row.classList.add('selRow');
+  const box = document.getElementById('narasiBox');
+  if (!box) return;
+  box.innerHTML = narasiBulanHTML(loadData(currentModule).records || [], i);
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function renderJenisHTML(records) {
   const map = aggregateJenisUsaha(records);
-  const jenisList = Object.keys(map).sort((a,b) => map[b]["2026"] - map[a]["2026"]);
+  const jenisList = Object.keys(map).sort((a,b) => map[b][Y2] - map[a][Y2]);
   let rows = jenisList.map(j => {
     const d = map[j];
     return `<tr>
       <td>${j}</td>
-      <td>${rupiah(d["2024"])}</td>
-      <td>${rupiah(d["2025"])}</td>
-      <td>${rupiah(d["2026"])}</td>
-      <td>${pct(growth(d["2025"], d["2024"]))}</td>
-      <td>${pct(growth(d["2026"], d["2025"]))}</td>
+      <td>${rupiah(d[Y0])}</td>
+      <td>${rupiah(d[Y1])}</td>
+      <td>${rupiah(d[Y2])}</td>
+      <td>${pct(growth(d[Y1], d[Y0]))}</td>
+      <td>${pct(growth(d[Y2], d[Y1]))}</td>
     </tr>`;
   }).join('');
   return `
   <div class="chartBox"><canvas id="jenisChart"></canvas></div>
   <div class="tableWrap"><table>
-    <thead><tr><th>Jenis/Kategori</th><th>2024</th><th>2025</th><th>2026</th><th>Growth 25/24</th><th>Growth 26/25</th></tr></thead>
+    <thead><tr><th>Jenis/Kategori</th><th>${Y0}</th><th>${Y1}</th><th>${Y2}</th><th>Growth ${YS(Y1)}/${YS(Y0)}</th><th>Growth ${YS(Y2)}/${YS(Y1)}</th></tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
 }
@@ -562,8 +690,8 @@ function renderJenisHTML(records) {
 function renderPerWPHTML(records) {
   let filtered = filterRecords(records, searchTerm);
   filtered = filtered.slice().sort((a,b) => {
-    const ta = (a.data && a.data["2026"] && a.data["2026"].total) || 0;
-    const tb = (b.data && b.data["2026"] && b.data["2026"].total) || 0;
+    const ta = (a.data && a.data[Y2] && a.data[Y2].total) || 0;
+    const tb = (b.data && b.data[Y2] && b.data[Y2].total) || 0;
     return tb - ta;
   });
 
@@ -576,9 +704,9 @@ function renderPerWPHTML(records) {
 
   const rows = limited.map((r) => {
     const realIdx = records.indexOf(r);
-    const d24 = (r.data && r.data["2024"] && r.data["2024"].total) || 0;
-    const d25 = (r.data && r.data["2025"] && r.data["2025"].total) || 0;
-    const d26 = (r.data && r.data["2026"] && r.data["2026"].total) || 0;
+    const d24 = (r.data && r.data[Y0] && r.data[Y0].total) || 0;
+    const d25 = (r.data && r.data[Y1] && r.data[Y1].total) || 0;
+    const d26 = (r.data && r.data[Y2] && r.data[Y2].total) || 0;
     return `<tr onclick="openDetail(${realIdx})">
       <td>${r.nama || '-'}<br><small style="color:var(--gray);">${r.jenis || ''}</small></td>
       <td>${rupiah(d24)}</td>
@@ -589,12 +717,12 @@ function renderPerWPHTML(records) {
   }).join('');
 
   const note = limited.length < total
-    ? `<div class="limitNote">Menampilkan ${limited.length} dari ${total} WP (urut nilai 2026 terbesar). Gunakan pencarian atau tombol di bawah untuk lihat semua.</div>
+    ? `<div class="limitNote">Menampilkan ${limited.length} dari ${total} WP (urut nilai ${Y2} terbesar). Gunakan pencarian atau tombol di bawah untuk lihat semua.</div>
        <div class="loadMoreWrap"><button class="btn btn-outline btn-sm" onclick="showAll()">Tampilkan Semua (${total})</button></div>`
     : '';
 
   return `<div class="tableWrap"><table>
-    <thead><tr><th>Nama WP / Objek</th><th>2024</th><th>2025</th><th>2026</th><th>Growth 26/25</th></tr></thead>
+    <thead><tr><th>Nama WP / Objek</th><th>${Y0}</th><th>${Y1}</th><th>${Y2}</th><th>Growth ${YS(Y2)}/${YS(Y1)}</th></tr></thead>
     <tbody>${rows}</tbody>
   </table></div>${note}`;
 }
@@ -608,20 +736,20 @@ function renderPerWPBulananHTML(records) {
   const limited = (!showAllRows && !searchTerm.trim() && total > ROW_LIMIT) ? filtered.slice(0, ROW_LIMIT) : filtered;
 
   const monthHeaders = MONTHS.map(m => `<th colspan="3">${m}</th>`).join('');
-  const yearSubHeaders = MONTHS.map(() => `<th>24</th><th>25</th><th>26</th>`).join('');
+  const yearSubHeaders = MONTHS.map(() => `<th>${YS(Y0)}</th><th>${YS(Y1)}</th><th>${YS(Y2)}</th>`).join('');
 
   const rows = limited.map(r => {
     const realIdx = records.indexOf(r);
     let cells = '';
     for (let i = 0; i < 12; i++) {
-      const v24 = (r.data["2024"] && r.data["2024"].monthly[i]) || 0;
-      const v25 = (r.data["2025"] && r.data["2025"].monthly[i]) || 0;
-      const v26 = (r.data["2026"] && r.data["2026"].monthly[i]) || 0;
+      const v24 = (r.data[Y0] && r.data[Y0].monthly[i]) || 0;
+      const v25 = (r.data[Y1] && r.data[Y1].monthly[i]) || 0;
+      const v26 = (r.data[Y2] && r.data[Y2].monthly[i]) || 0;
       cells += `<td>${rupiah(v24)}</td><td>${rupiah(v25)}</td><td>${rupiah(v26)}</td>`;
     }
-    const t24 = (r.data["2024"] && r.data["2024"].total) || 0;
-    const t25 = (r.data["2025"] && r.data["2025"].total) || 0;
-    const t26 = (r.data["2026"] && r.data["2026"].total) || 0;
+    const t24 = (r.data[Y0] && r.data[Y0].total) || 0;
+    const t25 = (r.data[Y1] && r.data[Y1].total) || 0;
+    const t26 = (r.data[Y2] && r.data[Y2].total) || 0;
     return `<tr onclick="openDetail(${realIdx})">
       <td>${r.nama || '-'}<br><small style="color:var(--gray);">${r.jenis || ''}</small></td>
       ${cells}
@@ -638,7 +766,7 @@ function renderPerWPBulananHTML(records) {
   return `<div class="tableWrap"><table>
     <thead>
       <tr><th rowspan="2">Nama WP / Objek</th>${monthHeaders}<th colspan="3">Total</th><th colspan="2">Growth</th></tr>
-      <tr>${yearSubHeaders}<th>24</th><th>25</th><th>26</th><th>25/24</th><th>26/25</th></tr>
+      <tr>${yearSubHeaders}<th>${YS(Y0)}</th><th>${YS(Y1)}</th><th>${YS(Y2)}</th><th>${YS(Y1)}/${YS(Y0)}</th><th>${YS(Y2)}/${YS(Y1)}</th></tr>
     </thead>
     <tbody>${rows}</tbody>
   </table></div>${note}`;
@@ -686,20 +814,20 @@ function openDetail(idx) {
   const r = payload.records[idx];
   if (!r) return;
   let monthRows = MONTHS.map((m, i) => {
-    const v24 = (r.data["2024"] && r.data["2024"].monthly[i]) || 0;
-    const v25 = (r.data["2025"] && r.data["2025"].monthly[i]) || 0;
-    const v26 = (r.data["2026"] && r.data["2026"].monthly[i]) || 0;
+    const v24 = (r.data[Y0] && r.data[Y0].monthly[i]) || 0;
+    const v25 = (r.data[Y1] && r.data[Y1].monthly[i]) || 0;
+    const v26 = (r.data[Y2] && r.data[Y2].monthly[i]) || 0;
     return `<tr><td>${m}</td><td>${rupiah(v24)}</td><td>${rupiah(v25)}</td><td>${rupiah(v26)}</td></tr>`;
   }).join('');
-  const t24 = (r.data["2024"] && r.data["2024"].total) || 0;
-  const t25 = (r.data["2025"] && r.data["2025"].total) || 0;
-  const t26 = (r.data["2026"] && r.data["2026"].total) || 0;
+  const t24 = (r.data[Y0] && r.data[Y0].total) || 0;
+  const t25 = (r.data[Y1] && r.data[Y1].total) || 0;
+  const t26 = (r.data[Y2] && r.data[Y2].total) || 0;
 
   document.getElementById('modalContent').innerHTML = `
     <h3>${r.nama || '-'}</h3>
     <div class="sub">${r.jenis || ''} · NPWPD: ${r.npwpd || '-'}<br>${r.alamat || ''}</div>
     <div class="tableWrap"><table>
-      <thead><tr><th>Bulan</th><th>2024</th><th>2025</th><th>2026</th></tr></thead>
+      <thead><tr><th>Bulan</th><th>${Y0}</th><th>${Y1}</th><th>${Y2}</th></tr></thead>
       <tbody>${monthRows}
       <tr style="font-weight:800;background:#f8fafc;"><td>TOTAL</td><td>${rupiah(t24)}</td><td>${rupiah(t25)}</td><td>${rupiah(t26)}</td></tr>
       </tbody>
@@ -820,7 +948,7 @@ function deleteWP(idx) {
 }
 
 // =============================================================================
-// UPLOAD EXCEL BARU — membaca sheet "Data 2024/2025/2026" (format sama seperti
+// UPLOAD EXCEL BARU — membaca sheet "Data <tahun>" (3 tahun terakhir) (format sama seperti
 // file perbandingan SIMPADATAKA), lalu mengganti data modul sesuai tombol upload yang ditekan
 // (Hotel / Hiburan / Reklame terpisah, tidak lagi bergantung tab aktif).
 // =============================================================================
@@ -861,7 +989,7 @@ document.getElementById('fileInput').addEventListener('change', function (e) {
       if (records.length === 0) {
         showUploadReport('⚠️ Data tidak terbaca — belum ada yang berubah',
           `File: <b>${file.name}</b><br>Sheet di file: ${sheets.map(n => '<b>' + n + '</b>').join(', ') || '-'}<br><br>` +
-          `Aplikasi mencari sheet <b>Data 2024/2025/2026</b> atau laporan SIMPADATAKA (ada kolom NPWPD dan 12 bulan, tahun di sel "Tahun").` +
+          `Aplikasi mencari sheet <b>Data ${YEARS.join('/')}</b> atau laporan SIMPADATAKA (ada kolom NPWPD dan 12 bulan, tahun di sel "Tahun").` +
           (info.length ? '<br><br>' + info.join('<br>') : ''));
         return;
       }
@@ -944,7 +1072,8 @@ function parseWorkbook(wb) {
 // satu sheet, satu tahun (tertulis di sel "Tahun : 2026"), kolom bergabung/spasi,
 // nama kategori (kolom A) hanya di baris pertama tiap kategori, baris TOTAL dilewati.
 function detectSheetYear(ws, sheetName, fileName) {
-  let m = String(sheetName).match(/(2024|2025|2026)/);
+  const yrRe = new RegExp('(' + YEARS.join('|') + ')');
+  let m = String(sheetName).match(yrRe);
   if (m) return m[1];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, range: 0 }).slice(0, 12);
   for (const row of rows) {
@@ -952,7 +1081,7 @@ function detectSheetYear(ws, sheetName, fileName) {
     const txt = row.filter(v => v !== null && v !== undefined).map(String).join(' ');
     if (/tahun/i.test(txt)) { m = txt.match(/(20\d\d)/); if (m) return m[1]; }
   }
-  m = String(fileName || '').match(/(2024|2025|2026)/);
+  m = String(fileName || '').match(yrRe);
   return m ? m[1] : null;
 }
 
@@ -1059,6 +1188,7 @@ if ('serviceWorker' in navigator) {
 // =============================================================================
 // INIT
 // =============================================================================
+document.getElementById('yearRange').textContent = Y0 + '–' + Y2;
 renderAll();
 initCloudSync();
 </script>
