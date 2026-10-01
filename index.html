@@ -156,6 +156,27 @@ const SEED = {
 let currentModule = "hotel";
 let currentSub = "ringkasan"; // ringkasan | jenis | perwp | perwpbulanan | data<tahun>
 let selectedMonth = null; // indeks bulan (0-11) yang diklik di Ringkasan Bulanan
+// Self assessment: WP baru tutup buku sampai bulan tertentu, bulan sesudahnya belum lengkap.
+// CUTOFF = indeks bulan terakhir yang sudah tutup buku (7 = Agustus). 11 = tampilkan semua bulan.
+let CUTOFF = 7;
+try { const c = localStorage.getItem('pajak_cutoff'); if (c !== null && +c >= 0 && +c <= 11) CUTOFF = +c; } catch (e) {}
+function applyCutoff(records) {
+  if (CUTOFF >= 11) return records;
+  return records.map(r => {
+    const data = {};
+    Object.keys(r.data || {}).forEach(y => {
+      const m = (r.data[y].monthly || []).map((v, i) => i <= CUTOFF ? (Number(v) || 0) : 0);
+      data[y] = { monthly: m, total: m.reduce((a, b) => a + b, 0) };
+    });
+    return { ...r, data };
+  });
+}
+function setCutoff(v) {
+  CUTOFF = +v;
+  try { localStorage.setItem('pajak_cutoff', String(CUTOFF)); } catch (e) {}
+  if (selectedMonth !== null && selectedMonth > CUTOFF) selectedMonth = null;
+  renderAll();
+}
 let searchTerm = "";
 let showAllRows = false;
 let ringkasanChartInstance = null;
@@ -337,10 +358,10 @@ function drawRingkasanChart(totals) {
   ringkasanChartInstance = new Chart(canvas.getContext('2d'), {
     type: 'line',
     data: {
-      labels: MONTHS,
+      labels: MONTHS.slice(0, CUTOFF + 1),
       datasets: YEARS.map(y => ({
         label: y,
-        data: totals[y],
+        data: totals[y].slice(0, CUTOFF + 1),
         borderColor: colors[y],
         backgroundColor: colors[y],
         tension: 0.3,
@@ -445,7 +466,9 @@ const SEARCHABLE_SUBS = ['perwp', 'perwpbulanan', ...YEARS.map(y => 'data' + y)]
 
 function renderToolbar() {
   const el = document.getElementById('toolRow');
-  let html = '';
+  let html = `<label style="font-size:12px;font-weight:700;">Tutup buku s.d.
+    <select onchange="setCutoff(this.value)" style="padding:6px;border-radius:8px;">${MONTH_FULL.map((m, i) =>
+      `<option value="${i}"${i === CUTOFF ? ' selected' : ''}>${i === 11 ? 'Desember (semua bulan)' : m}</option>`).join('')}</select></label>`;
   if (SEARCHABLE_SUBS.includes(currentSub)) {
     html += `<input type="text" id="searchBox" placeholder="Cari nama WP / NPWPD / alamat..." value="${searchTerm.replace(/"/g,'&quot;')}" oninput="onSearch(this.value)" />`;
     const presetYear = currentSub.startsWith('data') ? currentSub.replace('data', '') : YEARS[YEARS.length - 1];
@@ -496,7 +519,8 @@ function renderMeta() {
 function renderContent() {
   const el = document.getElementById('content');
   const payload = loadData(currentModule);
-  const records = payload.records || [];
+  const rawRecords = payload.records || [];
+  const records = currentSub.startsWith('data') ? rawRecords : applyCutoff(rawRecords);
 
   if (records.length === 0) {
     el.innerHTML = '<div class="empty">Belum ada data untuk modul ini. Silakan upload data Excel.</div>';
@@ -524,6 +548,7 @@ function renderRingkasanHTML(records) {
   let rows = '';
   const yearTotal = { [Y0]:0, [Y1]:0, [Y2]:0 };
   MONTHS.forEach((m, i) => {
+    if (i > CUTOFF) return; // bulan setelah tutup buku tidak ditampilkan
     const v0 = totals[Y0][i], v1 = totals[Y1][i], v2 = totals[Y2][i];
     yearTotal[Y0] += v0; yearTotal[Y1] += v1; yearTotal[Y2] += v2;
     rows += `<tr class="rkRow${selectedMonth === i ? ' selRow' : ''}" id="rkRow${i}" onclick="selectRingkasanMonth(${i})">
@@ -536,7 +561,7 @@ function renderRingkasanHTML(records) {
     </tr>`;
   });
   rows += `<tr style="font-weight:800;background:#f8fafc;">
-    <td>TOTAL SETAHUN</td>
+    <td>${CUTOFF < 11 ? 'TOTAL JAN–' + MONTHS[CUTOFF] : 'TOTAL SETAHUN'}</td>
     <td>${rupiah(yearTotal[Y0])}</td>
     <td>${rupiah(yearTotal[Y1])}</td>
     <td>${rupiah(yearTotal[Y2])}</td>
