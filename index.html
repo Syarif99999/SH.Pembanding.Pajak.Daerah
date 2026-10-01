@@ -983,6 +983,7 @@ document.getElementById('fileInput').addEventListener('change', function (e) {
         const wb = XLSX.read(buf, { type: 'array' });
         sheets.push(...wb.SheetNames);
         let r = parseWorkbook(wb);
+        if (r.length === 0) r = parseDaftarPenerimaan(wb, info, f.name);
         if (r.length === 0) r = parseWorkbookFlexible(wb, info, f.name);
         records = records.concat(r);
       });
@@ -998,7 +999,7 @@ document.getElementById('fileInput').addEventListener('change', function (e) {
       const groups = { hotel: [], hiburan: [], reklame: [] };
       const unknown = [];
       records.forEach(r => {
-        const m = detectModule(r.jenis);
+        const m = r._mod || detectModule(r.jenis);
         if (m) groups[m].push(r); else unknown.push(r);
       });
 
@@ -1123,6 +1124,71 @@ function parseWorkbookFlexible(wb, info, fileName) {
     info.push(`Sheet "${sn}" (tahun ${y}): ${n} WP terbaca`);
   });
   return order.map(k => recordMap[k]);
+}
+
+// Parser laporan SIMPADATAKA "DAFTAR PENERIMAAN BULANAN PAJAK <JENIS> TAHUN <thn>"
+// (Reklame.xlsx / Hiburan.xlsx / hotel.xlsx). Bulan dibaca dari baris header (bukan dihitung
+// berurutan), jadi aman untuk kolom kosong/gabungan (mis. Maret = I:J), bulan yang belum
+// berjalan (hanya Jan–Sep), dan header yang diulang tiap halaman.
+const NAMA_BULAN = ['JANUARI','FEBRUARI','MARET','APRIL','MEI','JUNI','JULI','AGUSTUS','SEPTEMBER','OKTOBER','NOVEMBER','DESEMBER'];
+function parseDaftarPenerimaan(wb, info, fileName) {
+  const out = [];
+  wb.SheetNames.forEach(sn => {
+    const ws = wb.Sheets[sn];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+    let judul = '';
+    for (const row of rows.slice(0, 6)) {
+      const t = (row || []).filter(v => typeof v === 'string').join(' ');
+      if (/DAFTAR\s+PENERIMAAN\s+BULANAN/i.test(t)) { judul = t; break; }
+    }
+    if (!judul) return;
+    const ym = judul.match(/TAHUN\s+(20\d\d)/i);
+    const y = ym ? ym[1] : detectSheetYear(ws, sn, fileName);
+    if (!y || !YEARS.includes(y)) { info.push(`Sheet "${sn}": tahun ${y || '?'} di luar jendela ${YEARS.join('/')}`); return; }
+    const jt = (judul + ' ' + (fileName || '')).toUpperCase();
+    const mod = /HOTEL/.test(jt) ? 'hotel' : /HIBURAN/.test(jt) ? 'hiburan' : /REKLAME/.test(jt) ? 'reklame' : null;
+    if (!mod) { info.push(`Sheet "${sn}": jenis pajak tidak terdeteksi dari judul`); return; }
+
+    let colMonth = {}, colNama = 1, colAlamat = 2, colTotal = -1, n = 0;
+    const map = {};
+    rows.forEach(row => {
+      if (!row) return;
+      const cells = row.map(v => v === undefined ? null : v);
+      // baris header bulan -> perbarui pemetaan kolom
+      const mc = {};
+      cells.forEach((v, i) => {
+        if (typeof v !== 'string') return;
+        const k = NAMA_BULAN.indexOf(v.trim().toUpperCase());
+        if (k >= 0) mc[i] = k;
+      });
+      if (Object.keys(mc).length >= 3) { colMonth = mc; return; }
+      cells.forEach((v, i) => {
+        if (typeof v !== 'string') return;
+        const t = v.trim().toUpperCase();
+        if (t === 'NAMA USAHA') colNama = i;
+        else if (t === 'ALAMAT USAHA') colAlamat = i;
+        else if (t === 'TOTAL') colTotal = i;
+      });
+      const ni = cells.findIndex(v => typeof v === 'string' && /^P\d{15,}/i.test(v.trim()));
+      if (ni < 0 || !Object.keys(colMonth).length) return;
+      const npwpd = cells[ni].trim();
+      const nama = String(cells[colNama] || '').trim();
+      const alamat = String(cells[colAlamat] || '').trim();
+      const monthly = Array(12).fill(0);
+      Object.keys(colMonth).forEach(ci => { monthly[colMonth[ci]] = Number(cells[ci]) || 0; });
+      const sum = monthly.reduce((a, b) => a + b, 0);
+      const total = (colTotal >= 0 && typeof cells[colTotal] === 'number') ? cells[colTotal] : sum;
+      const key = npwpd + '|' + nama;
+      if (!map[key]) { map[key] = { jenis: '', nama, alamat, npwpd, data: {}, _mod: mod }; out.push(map[key]); }
+      const prev = map[key].data[y];
+      map[key].data[y] = prev
+        ? { monthly: prev.monthly.map((v, i) => v + monthly[i]), total: prev.total + total }
+        : { monthly, total };
+      n++;
+    });
+    info.push(`Sheet "${sn}" — Pajak ${MODULES[mod].label} ${y}: ${n} WP terbaca`);
+  });
+  return out;
 }
 
 // Gabungkan hasil upload ke data yang sudah ada: hanya TAHUN yang ada di file yang diganti,
